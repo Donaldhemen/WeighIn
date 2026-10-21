@@ -90,6 +90,7 @@ export interface InvocationSpec {
 export interface ContractSpec {
   id?: string;
   wasm_path: string;
+  constructor_args?: InvocationArg[];
   invocations: InvocationSpec[];
 }
 
@@ -298,6 +299,21 @@ function calculateContractId(deployerAddress: string, salt: Buffer): string {
 
   const contractIdBytes = hash(hashIdPreimage.toXDR());
   return StrKey.encodeContract(contractIdBytes);
+}
+
+function calculateDeploymentSalt(
+  wasmHash: Buffer,
+  constructorArgs: xdr.ScVal[],
+): Buffer {
+  if (constructorArgs.length === 0) {
+    return crypto.createHash("sha256").update(wasmHash).digest();
+  }
+  return crypto
+    .createHash("sha256")
+    .update("weighin-constructor-args-v1\0")
+    .update(wasmHash)
+    .update(xdr.ScVal.scvVec(constructorArgs).toXDR())
+    .digest();
 }
 
 /**
@@ -630,6 +646,9 @@ export async function runMeasurement(
     opts.fixtureId ??
       path.relative(process.cwd(), path.resolve(opts.fixturesPath)),
   );
+  const constructorArgs = fixturesSpec.contracts.map(
+    (contractSpec) => contractSpec.constructor_args?.map(toScVal) ?? [],
+  );
 
   const server = new rpc.Server(effectiveRpcUrl, { allowHttp: true });
   const deployer = await getOrInitAccount(
@@ -641,7 +660,11 @@ export async function runMeasurement(
 
   const results: ContractBenchmark[] = [];
 
-  for (const contractSpec of fixturesSpec.contracts) {
+  for (const [
+    contractIndex,
+    contractSpec,
+  ] of fixturesSpec.contracts.entries()) {
+    const contractConstructorArgs = constructorArgs[contractIndex];
     let wasmPath = path.resolve(fixturesDir, contractSpec.wasm_path);
     if (!fs.existsSync(wasmPath)) {
       let altPath = "";
@@ -666,8 +689,8 @@ export async function runMeasurement(
     console.log(`WASM: ${wasmPath}`);
     console.log(`WASM SHA256: ${wasmSha256}`);
 
-    // Deterministic salt based on WASM hash — same WASM always gets same contract ID
-    const salt = crypto.createHash("sha256").update(wasmHash).digest();
+    // Preserve legacy deployment identity unless constructor arguments initialize state.
+    const salt = calculateDeploymentSalt(wasmHash, contractConstructorArgs);
     const contractId = calculateContractId(deployer.publicKey(), salt);
 
     console.log(`Contract ID: ${contractId}`);
@@ -717,6 +740,7 @@ export async function runMeasurement(
             wasmHash,
             address: deployerAddress,
             salt,
+            constructorArgs: contractConstructorArgs,
           }),
         )
         .setTimeout(30)
@@ -727,7 +751,9 @@ export async function runMeasurement(
       await submitAndConfirm(
         server,
         preparedCreate,
-        "contract creation",
+        contractSpec.constructor_args !== undefined
+          ? "contract creation with constructor"
+          : "contract creation",
         effectiveRpcUrl,
         opts.signal,
       );

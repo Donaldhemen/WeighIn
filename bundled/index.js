@@ -36127,6 +36127,7 @@ var InvocationSpecSchema = external_exports.object({
 var ContractSpecSchema = external_exports.object({
   id: idSchema.optional(),
   wasm_path: external_exports.string().min(1),
+  constructor_args: external_exports.array(InvocationArgSchema).optional(),
   invocations: external_exports.array(InvocationSpecSchema).min(1)
 }).strict();
 var FixturesSpecSchema = external_exports.object({
@@ -54157,6 +54158,12 @@ function calculateContractId(deployerAddress, salt) {
   const contractIdBytes = hash(hashIdPreimage.toXDR());
   return StrKey.encodeContract(contractIdBytes);
 }
+function calculateDeploymentSalt(wasmHash, constructorArgs) {
+  if (constructorArgs.length === 0) {
+    return crypto3.createHash("sha256").update(wasmHash).digest();
+  }
+  return crypto3.createHash("sha256").update("weighin-constructor-args-v1\0").update(wasmHash).update(types.ScVal.scvVec(constructorArgs).toXDR()).digest();
+}
 function assertPrivateKeyFileStats(stats, keyFile) {
   if (!stats.isFile()) {
     throw new Error(
@@ -54391,6 +54398,9 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
     rawFixtures,
     opts.fixtureId ?? path3.relative(process.cwd(), path3.resolve(opts.fixturesPath))
   );
+  const constructorArgs = fixturesSpec.contracts.map(
+    (contractSpec) => contractSpec.constructor_args?.map(toScVal) ?? []
+  );
   const server = new rpc_exports.Server(effectiveRpcUrl, { allowHttp: true });
   const deployer = await getOrInitAccount(
     keyFile,
@@ -54399,7 +54409,11 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
   );
   const deployerAddress = Address.fromString(deployer.publicKey());
   const results = [];
-  for (const contractSpec of fixturesSpec.contracts) {
+  for (const [
+    contractIndex,
+    contractSpec
+  ] of fixturesSpec.contracts.entries()) {
+    const contractConstructorArgs = constructorArgs[contractIndex];
     let wasmPath = path3.resolve(fixturesDir, contractSpec.wasm_path);
     if (!fs2.existsSync(wasmPath)) {
       let altPath = "";
@@ -54422,7 +54436,7 @@ Build the contract before running measurements.`
     const wasmSha256 = wasmHash.toString("hex");
     console.log(`WASM: ${wasmPath}`);
     console.log(`WASM SHA256: ${wasmSha256}`);
-    const salt = crypto3.createHash("sha256").update(wasmHash).digest();
+    const salt = calculateDeploymentSalt(wasmHash, contractConstructorArgs);
     const contractId = calculateContractId(deployer.publicKey(), salt);
     console.log(`Contract ID: ${contractId}`);
     const deployed = await isContractDeployed(server, contractId);
@@ -54459,7 +54473,8 @@ Build the contract before running measurements.`
         Operation.createCustomContract({
           wasmHash,
           address: deployerAddress,
-          salt
+          salt,
+          constructorArgs: contractConstructorArgs
         })
       ).setTimeout(30).build();
       const preparedCreate = await server.prepareTransaction(createTx);
@@ -54467,7 +54482,7 @@ Build the contract before running measurements.`
       await submitAndConfirm(
         server,
         preparedCreate,
-        "contract creation",
+        contractSpec.constructor_args !== void 0 ? "contract creation with constructor" : "contract creation",
         effectiveRpcUrl,
         opts.signal
       );

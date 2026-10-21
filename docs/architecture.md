@@ -68,10 +68,15 @@ An explicit ID is the caller's assertion of continuity across revisions.
 ### Deployment/runtime identity
 
 `src/measurement.ts::runMeasurement` hashes the WASM. That hash determines the
-deployment salt; the address also depends on the deployer and standalone network
-ID. The same WASM may reuse a deployment; changed WASM can change the address.
-Upload and creation transactions are real submitted transactions. A generated
-private deployer key is shared across BASE/HEAD in a private temporary file.
+deployment salt when no constructor arguments are configured, preserving
+existing deployment addresses. Nonempty typed `constructor_args` derive a
+domain-separated salt from the WASM hash and serialized ScVal arguments, so
+different initialized states use different instances. The address also depends
+on the deployer and standalone network ID. Upload and creation transactions are
+real submitted transactions; the SDK atomically invokes a contract constructor
+as part of custom contract creation. Failed constructor creation fails the
+scenario before any benchmark invocation. A generated private deployer key is
+shared across BASE/HEAD in a private temporary file.
 Submission classifies the RPC `sendTransaction` status before polling: `ERROR`
 and `TRY_AGAIN_LATER` fail immediately (no confirmation poll, no dependent
 upload/create step, and no hidden resubmission); `PENDING` or `DUPLICATE` with a
