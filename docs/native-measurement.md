@@ -47,6 +47,18 @@ used in the proof. The Action's modern contract build now uses the
 [Stellar build path](contract-build.md), with its own verified reference and
 explicit migration limitations.
 
+## Deployer key-file security
+
+Before loading an existing `keyFile` or funding its account, WeighIn opens the
+file without following symlinks and verifies the opened file is regular, owned
+by the current user, and has no group or other permission bits set. Owner-only
+read-only or read/write files are accepted. New key files are created
+exclusively with mode `0600`; an existing file is never overwritten or rotated.
+The check is performed on POSIX systems with `O_NOFOLLOW` support. Windows is
+rejected because Node does not provide portable verification of file ownership
+and ACL privacy. Keep the key's parent directory and storage under trusted
+control as well.
+
 CLI example, after building a contract and provisioning RPC:
 
 During the reference's temporary [fixture migration](fixture-migration.md), use
